@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -301,29 +302,132 @@ func (a *App) ExecuteSearch(query *core.SearchQuery) error {
 	return nil
 }
 
-// ExecuteBatch runs multiple queries.
+// ExecuteBatch runs multiple queries sequentially with delay.
 func (a *App) ExecuteBatch(queries []string, provider core.ProviderID, delay string) error {
 	var delayDur int
 	if delay != "" {
 		fmt.Sscanf(delay, "%d", &delayDur)
 	}
 
+	total := len(queries)
+	startTime := time.Now()
+	var successCount, failCount int
+
+	// Available providers for rotation (if "auto" specified)
+	providerList := []core.ProviderID{
+		core.ProviderBing,
+		core.ProviderGoogle,
+		core.ProviderDuckDuckGo,
+		core.ProviderBrave,
+	}
+	useRotation := provider == "auto" || provider == ""
+
 	for i, q := range queries {
+		// Rotate providers if auto mode
+		prov := provider
+		if useRotation {
+			prov = providerList[i%len(providerList)]
+		}
+
 		query := &core.SearchQuery{
 			Query:    q,
-			Provider: provider,
+			Provider: prov,
 		}
 
 		a.Log.Info("executing batch query", logger.LogFields{
-			"index": i + 1,
-			"total": len(queries),
-			"query": q,
+			"index":    i + 1,
+			"total":    total,
+			"provider": prov,
+			"query":    q[:min(len(q), 80)],
 		})
 
-		if err := a.ExecuteSearch(query); err != nil {
-			a.Log.Error("batch query failed", err, logger.LogFields{"query": q})
+		// Execute with retry on 429
+		var lastErr error
+		for attempt := 0; attempt < 3; attempt++ {
+			if attempt > 0 {
+				backoff := time.Duration(5+attempt*10) * time.Second
+				a.Log.Warn("retrying query after backoff", logger.LogFields{
+					"attempt": attempt + 1,
+					"backoff": backoff.String(),
+					"query":   q[:min(len(q), 60)],
+				})
+				time.Sleep(backoff)
+
+				// Rotate provider on retry
+				if useRotation {
+					query.Provider = providerList[(i+attempt)%len(providerList)]
+				} else {
+					// Try switching to another provider temporarily
+					altProviders := []core.ProviderID{
+						core.ProviderBing, core.ProviderGoogle,
+						core.ProviderDuckDuckGo, core.ProviderBrave,
+					}
+					for _, alt := range altProviders {
+						if alt != prov {
+							query.Provider = alt
+							break
+						}
+					}
+				}
+			}
+
+			err := a.ExecuteSearch(query)
+			if err == nil {
+				lastErr = nil
+				break
+			}
+			lastErr = err
+
+			// Check if it's a rate limit error (429)
+			errStr := err.Error()
+			if strings.Contains(errStr, "429") || strings.Contains(errStr, "rate limit") ||
+				strings.Contains(errStr, "too many requests") {
+				a.Log.Warn("rate limited, will retry with different provider", logger.LogFields{
+					"provider": query.Provider,
+					"attempt":  attempt + 1,
+				})
+				continue
+			}
+			// Non-rate-limit error, don't retry
+			break
+		}
+
+		if lastErr != nil {
+			a.Log.Error("batch query failed", lastErr, logger.LogFields{
+				"query": q[:min(len(q), 60)],
+			})
+			failCount++
+		} else {
+			successCount++
+		}
+
+		// Delay between queries
+		if delayDur > 0 && i < total-1 {
+			time.Sleep(time.Duration(delayDur) * time.Second)
+		}
+
+		// Progress report every 100 queries
+		if (i+1)%100 == 0 || i == total-1 {
+			elapsed := time.Since(startTime)
+			perQuery := elapsed / time.Duration(i+1)
+			remaining := time.Duration(total-i-1) * perQuery
+			a.Log.Info("batch progress", logger.LogFields{
+				"processed": i + 1,
+				"total":     total,
+				"success":   successCount,
+				"failed":    failCount,
+				"elapsed":   elapsed.Round(time.Second).String(),
+				"eta":       remaining.Round(time.Second).String(),
+			})
 		}
 	}
+
+	a.Log.Info("batch complete", logger.LogFields{
+		"total":   total,
+		"success": successCount,
+		"failed":  failCount,
+		"elapsed": time.Since(startTime).Round(time.Second).String(),
+	})
 
 	return nil
 }
@@ -477,7 +581,15 @@ Supports TXT, JSON, and CSV input formats.`,
 				if err != nil {
 					return fmt.Errorf("reading query file: %w", err)
 				}
-				queries = strings.Split(strings.TrimSpace(string(data)), "\n")
+				// Split lines and clean \r (Windows CRLF) and empty lines
+				raw := strings.Split(string(data), "\n")
+				queries = make([]string, 0, len(raw))
+				for _, line := range raw {
+					line = strings.TrimSpace(line)
+					if line != "" && !strings.HasPrefix(line, "#") && !strings.HasPrefix(line, "//") {
+						queries = append(queries, line)
+					}
+				}
 			} else if len(args) > 0 {
 				queries = args
 			} else {
@@ -493,7 +605,7 @@ Supports TXT, JSON, and CSV input formats.`,
 		},
 	}
 
-	cmd.Flags().StringVarP(&provider, "provider", "p", "bing", "Search provider")
+	cmd.Flags().StringVarP(&provider, "provider", "p", "auto", "Search provider (bing, google, duckduckgo, brave, auto)")
 	cmd.Flags().StringVarP(&file, "file", "f", "", "Query file path")
 	cmd.Flags().StringVarP(&delay, "delay", "d", "0", "Delay between queries (seconds)")
 	cmd.Flags().StringVarP(&output, "output", "o", "", "Output file path")
