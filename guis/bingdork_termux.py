@@ -25,7 +25,6 @@ import csv
 import subprocess
 import shutil
 import time
-import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional
@@ -232,12 +231,9 @@ class DorkRunner:
         global BINARY_PATH
         if BINARY_PATH:
             return True
-        # Try to find it
-        result = subprocess.run(
-            ["which", "bingdork"], capture_output=True, text=True
-        )
-        if result.returncode == 0:
-            BINARY_PATH = result.stdout.strip()
+        # Use shutil.which() - works on Termux without 'which' command
+        BINARY_PATH = shutil.which("bingdork")
+        if BINARY_PATH:
             return True
         return False
 
