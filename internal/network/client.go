@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/corpix/uarand"
+	"github.com/bingdork/bingdork/pkg/useragent"
 	"github.com/go-resty/resty/v2"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/proxy"
@@ -280,10 +280,9 @@ func (c *Client) getRandomUserAgent() string {
 	if len(c.cfg.UserAgents) > 0 {
 		return c.cfg.UserAgents[rand.Intn(len(c.cfg.UserAgents))]
 	}
-	return uarand.GetRandom()
+	return useragent.Get()
 }
 
-// rotateProxy rotates the proxy for the request.
 func (c *Client) rotateProxy(req *resty.Request) {
 	if len(c.cfg.Evasion.ProxyList) == 0 {
 		return
