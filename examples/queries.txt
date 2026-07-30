@@ -1,0 +1,46 @@
+# Example queries for BingDork Pro batch mode
+# One query per line
+
+# Basic OSINT queries
+site:example.com
+site:example.com intitle:admin
+site:example.com intitle:login
+site:example.com filetype:pdf
+site:example.com filetype:xls
+site:example.com inurl:admin
+site:example.com inurl:api
+site:example.com inurl:wp-content
+site:example.com inurl:backup
+
+# Subdomain discovery
+site:*.example.com
+-site:www.example.com site:example.com
+site:example.com -inurl:www
+
+# Technology detection
+site:example.com intitle:"powered by"
+site:example.com "wordpress"
+site:example.com "nginx"
+site:example.com "cloudflare"
+
+# Vulnerability research
+site:example.com intitle:"index of"
+site:example.com inurl:phpinfo.php
+site:example.com inurl:.git
+site:example.com inurl:/.env
+site:example.com "sql" "error" filetype:log
+
+# Asset discovery
+site:example.com "s3.amazonaws.com"
+site:example.com "cloudfront.net"
+site:example.com "github.com"
+site:example.com "linkedin.com"
+site:example.com intitle:test
+site:example.com intitle:dev
+site:example.com intitle:staging
+site:example.com intitle:internal
+
+# SSL/TLS related
+site:example.com "ssl" filetype:pem
+site:example.com "certificate" filetype:crt
+site:example.com "private key"

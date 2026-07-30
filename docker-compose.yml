@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  bingdork:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: bingdork:latest
+    container_name: bingdork
+    volumes:
+      - bingdork-data:/home/bingdork/.bingdork
+      - ./config:/home/bingdork/.bingdork:ro
+      - ./output:/output
+    environment:
+      - BINGDORK_LOGGING_LEVEL=${BINGDORK_LOGGING_LEVEL:-info}
+      - BINGDORK_NETWORK_TIMEOUT=${BINGDORK_NETWORK_TIMEOUT:-30s}
+      - BINGDORK_OUTPUT_FORMAT=${BINGDORK_OUTPUT_FORMAT:-json}
+      - BINGDORK_PROVIDERS_BING_RATE_LIMIT=${BINGDORK_RATE_LIMIT:-5}
+    entrypoint: ["/usr/local/bin/bingdork"]
+    command: ["--help"]
+    networks:
+      - bingdork-net
+
+  # Optional: Prometheus metrics endpoint
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: bingdork-prometheus
+    volumes:
+      - ./scripts/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    networks:
+      - bingdork-net
+    profiles:
+      - monitoring
+
+  # Optional: Redis for distributed caching
+  redis:
+    image: redis:7-alpine
+    container_name: bingdork-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - bingdork-net
+    profiles:
+      - cache
+
+volumes:
+  bingdork-data:
+
+networks:
+  bingdork-net:
+    driver: bridge

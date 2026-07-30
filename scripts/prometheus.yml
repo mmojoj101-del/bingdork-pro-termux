@@ -1,0 +1,15 @@
+# prometheus:
+#   scrape_configs:
+#     - job_name: 'bingdork'
+#       scrape_interval: 15s
+#       static_configs:
+#         - targets: ['bingdork:2112']
+
+# Save this file to scripts/prometheus.yml and
+# uncomment the prometheus service in docker-compose.yml
+
+scrape_configs:
+  - job_name: 'bingdork'
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['localhost:2112']

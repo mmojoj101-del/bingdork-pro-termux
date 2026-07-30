@@ -1,0 +1,51 @@
+# Binaries
+build/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bingdork
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+*.prof
+*.cov
+
+# Dependency directories
+vendor/
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Application data
+~/.bingdork/
+
+# Build artifacts
+tmp/
+dist/
+release/
+
+# Environment files
+.env
+.env.local
+
+# Coverage
+coverage.out
+coverage.html
+
+# Temporary
+*.tmp
+*.bak
+*.log
