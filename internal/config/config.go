@@ -268,7 +268,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("cache.ttl", "5m")
 	v.SetDefault("cache.cleanup_interval", "1m")
 
-	v.SetDefault("storage.type", "sqlite")
+	v.SetDefault("storage.type", "jsonline")
 
 	v.SetDefault("output.format", "json")
 	v.SetDefault("output.pretty_print", true)

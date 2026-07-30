@@ -32,20 +32,22 @@ import (
 
 // App holds all application components.
 type App struct {
-	Config    *core.Config
-	Log       *logger.Logger
-	Engine    *engine.Engine
-	Scheduler *scheduler.Scheduler
-	Metrics   *metrics.Collector
-	Cache     *cache.Manager
-	Storage   *storage.Manager
-	Output    *output.Manager
-	Extractor *extractor.Extractor
-	Plugin    *plugin.Loader
-	ConfigMgr *config.Manager
+	Config      *core.Config
+	Log         *logger.Logger
+	Engine      *engine.Engine
+	Scheduler   *scheduler.Scheduler
+	Metrics     *metrics.Collector
+	Cache       *cache.Manager
+	Storage     *storage.Manager
+	Output      *output.Manager
+	OutputConfig *core.OutputConfig
+	Extractor   *extractor.Extractor
+	Plugin      *plugin.Loader
+	ConfigMgr   *config.Manager
 
 	ctx    context.Context
 	cancel context.CancelFunc
+	outputExporterInitialized bool
 }
 
 // NewApp creates a new application instance.
@@ -159,13 +161,14 @@ func (a *App) Initialize(cfgPath string) error {
 
 	// Output
 	outputMgr := output.NewManager(log)
-	exporter, err := output.NewExporterFromConfig(&cfg.Output, log)
-	if err != nil {
-		log.Warn("failed to initialize output exporter", logger.LogFields{"error": err})
-	} else {
-		outputMgr.Register(exporter)
+	// Initialize default exporter (will be recreated when -o/-f flags are used)
+	defExporter, defErr := output.NewExporterFromConfig(&cfg.Output, log)
+	if defErr == nil {
+		outputMgr.Register(defExporter)
 	}
 	a.Output = outputMgr
+	a.OutputConfig = &cfg.Output
+	a.outputExporterInitialized = (defErr == nil)
 
 	// Scheduler
 	sched, err := scheduler.New(&cfg.Scheduler, log)
@@ -218,7 +221,23 @@ func (a *App) Initialize(cfgPath string) error {
 	return nil
 }
 
-// Start begins the application.
+// ensureOutputExporter creates/recreates the output exporter with current config.
+func (a *App) ensureOutputExporter() error {
+	// Close old exporters
+	a.Output.CloseAll()
+	// Create new manager
+	a.Output = output.NewManager(a.Log)
+	exporter, err := output.NewExporterFromConfig(a.OutputConfig, a.Log)
+	if err != nil {
+		// Fallback to stdout-only exporter
+		a.Log.Warn("using fallback stdout exporter", logger.LogFields{"error": err})
+		exporter, _ = output.NewExporterFromConfig(&core.OutputConfig{Format: "text"}, a.Log)
+	}
+	a.Output.Register(exporter)
+	a.outputExporterInitialized = true
+	return nil
+}
+
 func (a *App) Start() {
 	a.Log.Info("starting BingDork Pro")
 
@@ -532,6 +551,12 @@ Supports Bing advanced operators: site:, intitle:, inurl:, filetype:, etc.`,
 				app.Config.Output.Format = format
 			}
 
+			// Copy output config and ensure exporter is ready
+			*app.OutputConfig = app.Config.Output
+			if err := app.ensureOutputExporter(); err != nil {
+				return err
+			}
+
 			return app.ExecuteSearch(searchQuery)
 		},
 	}
@@ -572,6 +597,12 @@ Supports TXT, JSON, and CSV input formats.`,
 			}
 			if format != "" {
 				app.Config.Output.Format = format
+			}
+
+			// Copy output config and ensure exporter is ready
+			*app.OutputConfig = app.Config.Output
+			if err := app.ensureOutputExporter(); err != nil {
+				return err
 			}
 
 			// Read queries from file or stdin

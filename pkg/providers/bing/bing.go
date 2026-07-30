@@ -241,13 +241,18 @@ func (p *Provider) parseResults(body string, query *core.SearchQuery) ([]*core.R
 	var results []*core.Result
 	position := 0
 
-	// Bing main result selectors
+	// Bing main result selectors (modern + legacy)
 	selectors := []string{
-		"li.b_algo",          // Main results
-		"li.b_algoExp",       // Expanded results
-		"div.b_caption",      // Caption-based results
-		"div.b_title",        // Title-based results
-		"li.sb_add",          // Additional results
+		"li.b_algo",              // Main results (original)
+		"#b_results > li",        // All result list items
+		"li.b_algoExp",           // Expanded results
+		"ol#b_results > li",       // Ordered list results
+		"div.b_algo",              // Div-based results
+		"div.b_caption",           // Caption-based results
+		"div.b_title",             // Title-based results
+		"li.sb_add",               // Additional results
+		"li.b_ans",                // Answer boxes
+		"li.b_ans0",               // Top answer
 	}
 
 	for _, selector := range selectors {
@@ -267,13 +272,18 @@ func (p *Provider) parseResults(body string, query *core.SearchQuery) ([]*core.R
 
 // extractResult extracts a single result from a Bing DOM element.
 func (p *Provider) extractResult(s *goquery.Selection, query *core.SearchQuery, position *int) *core.Result {
-	// Try different title selectors
+	// Try different title selectors (modern + legacy)
 	titleSelectors := []string{
-		"h2 a",
-		"h2",
-		"a[href]",
-		".b_algoSlug a",
-		"a.b_lt",
+		"h2 a",                    // Standard
+		"h2",                      // Plain h2
+		"a[href]",                 // Any linked result
+		".b_algoSlug a",           // Result slug
+		"a.b_lt",                  // Large title
+		"a[data-bm]",              // Data-bound links
+		".b_title a",              // Title class
+		".b_caption a[href]",      // Caption links
+		"#b_results h2 a",         // Within results container
+		".b_algo h2 a",            // Algorithm results
 	}
 
 	var title string
@@ -329,13 +339,19 @@ func (p *Provider) extractResult(s *goquery.Selection, query *core.SearchQuery, 
 // extractDescription extracts the result description/snippet.
 func (p *Provider) extractDescription(s *goquery.Selection) string {
 	descSelectors := []string{
-		"p.b_lineclamp2",
-		"p.b_foregroundtext",
-		"div.b_caption p",
-		"div.b_caption",
-		".b_algoSlug",
-		"span.b_more_text",
-		".b_caption div",
+		"p.b_lineclamp2",           // Clamped description
+		"p.b_foregroundtext",       // Foreground text
+		"div.b_caption p",          // Caption paragraph
+		"div.b_caption",            // Caption div
+		".b_caption .b_snippet",    // Snippet
+		".b_snippet",               // Generic snippet
+		"p.b_snippet",              // Snippet paragraph
+		".b_algoSlug",              // Result slug
+		"span.b_more_text",         // More text
+		".b_caption div",           // Caption div
+		".b_secondaryText",         // Secondary text
+		"div.b_newwrapper",         // New wrapper
+		"p.b_newwrapper",           // New wrapper paragraph
 	}
 
 	for _, sel := range descSelectors {
