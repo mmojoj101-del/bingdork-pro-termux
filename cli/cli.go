@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -321,18 +322,22 @@ func (a *App) ExecuteSearch(query *core.SearchQuery) error {
 	return nil
 }
 
-// ExecuteBatch runs multiple queries sequentially with delay.
-func (a *App) ExecuteBatch(queries []string, provider core.ProviderID, delay string) error {
+// ExecuteBatch runs multiple queries concurrently with worker pool.
+func (a *App) ExecuteBatch(queries []string, provider core.ProviderID, delay string, workers int, maxResults int) error {
 	var delayDur int
 	if delay != "" {
 		fmt.Sscanf(delay, "%d", &delayDur)
 	}
+	if workers <= 0 {
+		workers = 5
+	}
 
 	total := len(queries)
 	startTime := time.Now()
+	var mu sync.Mutex
 	var successCount, failCount int
 
-	// Available providers for rotation (if "auto" specified)
+	// Provider rotation list
 	providerList := []core.ProviderID{
 		core.ProviderBing,
 		core.ProviderGoogle,
@@ -341,103 +346,155 @@ func (a *App) ExecuteBatch(queries []string, provider core.ProviderID, delay str
 	}
 	useRotation := provider == "auto" || provider == ""
 
-	for i, q := range queries {
-		// Rotate providers if auto mode
-		prov := provider
-		if useRotation {
-			prov = providerList[i%len(providerList)]
-		}
+	// Worker pool
+	type job struct {
+		index   int
+		query   string
+		attempt int
+	}
 
-		query := &core.SearchQuery{
-			Query:    q,
-			Provider: prov,
-		}
+	jobs := make(chan job, total)
+	results := make(chan int, total)
 
-		a.Log.Info("executing batch query", logger.LogFields{
-			"index":    i + 1,
-			"total":    total,
-			"provider": prov,
-			"query":    q[:min(len(q), 80)],
-		})
-
-		// Execute with retry on 429
-		var lastErr error
-		for attempt := 0; attempt < 3; attempt++ {
-			if attempt > 0 {
-				backoff := time.Duration(5+attempt*10) * time.Second
-				a.Log.Warn("retrying query after backoff", logger.LogFields{
-					"attempt": attempt + 1,
-					"backoff": backoff.String(),
-					"query":   q[:min(len(q), 60)],
-				})
-				time.Sleep(backoff)
-
-				// Rotate provider on retry
+	// Start workers
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func(workerID int) {
+			defer wg.Done()
+			for j := range jobs {
+				prov := provider
 				if useRotation {
-					query.Provider = providerList[(i+attempt)%len(providerList)]
-				} else {
-					// Try switching to another provider temporarily
+					prov = providerList[(j.index+workerID)%len(providerList)]
+				}
+
+				// If specific provider, rotate on retry
+				if !useRotation && j.attempt > 0 {
 					altProviders := []core.ProviderID{
 						core.ProviderBing, core.ProviderGoogle,
 						core.ProviderDuckDuckGo, core.ProviderBrave,
 					}
 					for _, alt := range altProviders {
 						if alt != prov {
-							query.Provider = alt
+							prov = alt
 							break
 						}
 					}
 				}
+
+				query := &core.SearchQuery{
+					Query:      j.query,
+					Provider:   prov,
+					MaxResults: maxResults,
+					Page:       0,
+					Options:    make(map[string]string),
+				}
+
+				// Log progress for first few then every 50
+				if total <= 20 || j.index%50 == 0 || j.index == 0 {
+					a.Log.Info("executing batch query", logger.LogFields{
+						"index":    j.index + 1,
+						"total":    total,
+						"provider": prov,
+						"worker":   workerID + 1,
+						"query":    j.query[:min(len(j.query), 80)],
+					})
+				}
+
+				// Execute with retry on 429
+				var lastErr error
+				for attempt := 0; attempt < 3; attempt++ {
+					if attempt > 0 {
+						backoff := time.Duration(2+attempt*5) * time.Second
+						// Switch provider on retry
+						if useRotation {
+							query.Provider = providerList[(j.index+workerID+attempt)%len(providerList)]
+						} else {
+							altProviders := []core.ProviderID{
+								core.ProviderBing, core.ProviderGoogle,
+								core.ProviderDuckDuckGo, core.ProviderBrave,
+							}
+							for _, alt := range altProviders {
+								if alt != query.Provider {
+									query.Provider = alt
+									break
+								}
+							}
+						}
+						time.Sleep(backoff)
+					}
+
+					err := a.ExecuteSearch(query)
+					if err == nil {
+						lastErr = nil
+						break
+					}
+					lastErr = err
+
+					errStr := err.Error()
+					if strings.Contains(errStr, "429") || strings.Contains(errStr, "rate limit") ||
+						strings.Contains(errStr, "too many requests") {
+						continue
+					}
+					break
+				}
+
+				mu.Lock()
+				if lastErr != nil {
+					a.Log.Warn("batch query failed", logger.LogFields{
+						"query":  j.query[:min(len(j.query), 60)],
+						"error":  lastErr.Error(),
+						"worker": workerID + 1,
+					})
+					failCount++
+				} else {
+					successCount++
+				}
+				mu.Unlock()
+
+				// Delay between queries (per worker)
+				if delayDur > 0 {
+					time.Sleep(time.Duration(delayDur) * time.Second)
+				}
+
+				results <- 1
 			}
+		}(w)
+	}
 
-			err := a.ExecuteSearch(query)
-			if err == nil {
-				lastErr = nil
-				break
-			}
-			lastErr = err
-
-			// Check if it's a rate limit error (429)
-			errStr := err.Error()
-			if strings.Contains(errStr, "429") || strings.Contains(errStr, "rate limit") ||
-				strings.Contains(errStr, "too many requests") {
-				a.Log.Warn("rate limited, will retry with different provider", logger.LogFields{
-					"provider": query.Provider,
-					"attempt":  attempt + 1,
-				})
-				continue
-			}
-			// Non-rate-limit error, don't retry
-			break
+	// Send jobs
+	go func() {
+		for i, q := range queries {
+			jobs <- job{index: i, query: q}
 		}
+		close(jobs)
+	}()
 
-		if lastErr != nil {
-			a.Log.Error("batch query failed", lastErr, logger.LogFields{
-				"query": q[:min(len(q), 60)],
-			})
-			failCount++
-		} else {
-			successCount++
-		}
+	// Wait for all workers and collect results
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
 
-		// Delay between queries
-		if delayDur > 0 && i < total-1 {
-			time.Sleep(time.Duration(delayDur) * time.Second)
-		}
-
-		// Progress report every 100 queries
-		if (i+1)%100 == 0 || i == total-1 {
+	// Monitor progress
+	processed := 0
+	lastReport := 0
+	for range results {
+		processed++
+		if processed-lastReport >= 100 || processed == total {
 			elapsed := time.Since(startTime)
-			perQuery := elapsed / time.Duration(i+1)
-			remaining := time.Duration(total-i-1) * perQuery
+			perQuery := elapsed / time.Duration(processed)
+			remaining := time.Duration(total-processed) * perQuery
 			a.Log.Info("batch progress", logger.LogFields{
-				"processed": i + 1,
+				"processed": processed,
 				"total":     total,
 				"success":   successCount,
 				"failed":    failCount,
 				"elapsed":   elapsed.Round(time.Second).String(),
 				"eta":       remaining.Round(time.Second).String(),
+				"workers":   workers,
 			})
+			lastReport = processed
 		}
 	}
 
@@ -573,11 +630,13 @@ Supports Bing advanced operators: site:, intitle:, inurl:, filetype:, etc.`,
 // NewBatchCmd creates the batch command.
 func NewBatchCmd() *cobra.Command {
 	var (
-		provider string
-		file     string
-		delay    string
-		output   string
-		format   string
+		provider   string
+		file       string
+		delay      string
+		output     string
+		format     string
+		workers    int
+		maxResults int
 	)
 
 	cmd := &cobra.Command{
@@ -632,7 +691,7 @@ Supports TXT, JSON, and CSV input formats.`,
 				prov = core.ProviderBing
 			}
 
-			return app.ExecuteBatch(queries, prov, delay)
+			return app.ExecuteBatch(queries, prov, delay, workers, maxResults)
 		},
 	}
 
@@ -641,6 +700,8 @@ Supports TXT, JSON, and CSV input formats.`,
 	cmd.Flags().StringVarP(&delay, "delay", "d", "0", "Delay between queries (seconds)")
 	cmd.Flags().StringVarP(&output, "output", "o", "", "Output file path")
 	cmd.Flags().StringVarP(&format, "format", "t", "", "Output format")
+	cmd.Flags().IntVarP(&workers, "workers", "w", 5, "Number of concurrent workers")
+	cmd.Flags().IntVarP(&maxResults, "max-results", "m", 0, "Maximum results per query")
 
 	return cmd
 }
