@@ -3,6 +3,7 @@ package bing
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"math/rand"
 	"net/url"
@@ -383,6 +384,14 @@ func (p *Provider) deduplicate(results []*core.Result) []*core.Result {
 
 // cleanBingURL extracts the actual URL from Bing's redirect wrapper.
 func cleanBingURL(rawURL string) string {
+	// Handle Bing's /ck/a? redirect with base64 u= parameter
+	// Format: https://www.bing.com/ck/a?...&u=BASE64_ENCODED_URL&...
+	if strings.Contains(rawURL, "bing.com/ck/a") || strings.Contains(rawURL, "/ck/a?") {
+		if decoded := decodeBingCKURL(rawURL); decoded != "" {
+			return decoded
+		}
+	}
+
 	// Bing wraps URLs in redirect: /url?q=ACTUAL_URL&...
 	if strings.HasPrefix(rawURL, "/url?") || strings.HasPrefix(rawURL, "/redirect?") {
 		u, err := url.Parse(rawURL)
@@ -399,6 +408,18 @@ func cleanBingURL(rawURL string) string {
 			return l
 		}
 		return rawURL
+	}
+
+	// Also check if it's a full bing.com redirect URL
+	if parsed, err := url.Parse(rawURL); err == nil {
+		if strings.Contains(parsed.Host, "bing.com") {
+			// Check for u= parameter (base64 encoded URL)
+			if u := parsed.Query().Get("u"); u != "" {
+				if decoded := decodeBingParam(u); decoded != "" {
+					return decoded
+				}
+			}
+		}
 	}
 
 	// Ensure the URL has a scheme
@@ -420,6 +441,84 @@ func cleanBingURL(rawURL string) string {
 	u.RawQuery = stripTrackingParams(u.RawQuery)
 
 	return u.String()
+}
+
+// decodeBingCKURL decodes a Bing /ck/a redirect URL.
+// The actual URL is in the 'u' parameter, base64 encoded.
+func decodeBingCKURL(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	// Try 'u' parameter (base64 encoded)
+	if uParam := u.Query().Get("u"); uParam != "" {
+		if decoded := decodeBingParam(uParam); decoded != "" {
+			return decoded
+		}
+	}
+	// Try 'p' parameter (sometimes Bing uses this)
+	if pParam := u.Query().Get("p"); pParam != "" {
+		if decoded := decodeBingParam(pParam); decoded != "" {
+			return decoded
+		}
+	}
+	return ""
+}
+
+// decodeBingParam decodes a Bing URL parameter.
+// Bing uses base64 encoding with an "a1" prefix (sometimes "1a").
+// Format: a1 + base64_url (no padding)
+func decodeBingParam(encoded string) string {
+	if encoded == "" {
+		return ""
+	}
+
+	// Bing prefixes with "a1" or sometimes "1a"
+	cleaned := encoded
+	for _, prefix := range []string{"a1", "1a"} {
+		if strings.HasPrefix(cleaned, prefix) {
+			cleaned = strings.TrimPrefix(cleaned, prefix)
+			break
+		}
+	}
+
+	// Add standard base64 padding if needed
+	switch len(cleaned) % 4 {
+	case 1:
+		cleaned += "==="
+	case 2:
+		cleaned += "=="
+	case 3:
+		cleaned += "="
+	}
+
+	// Try standard base64 first
+	decoded, err := base64.StdEncoding.DecodeString(cleaned)
+	if err != nil {
+		// Try URL-safe base64
+		decoded, err = base64.URLEncoding.DecodeString(cleaned)
+	}
+	if err != nil {
+		// Maybe it's just a plain URL without encoding
+		if strings.HasPrefix(encoded, "http://") || strings.HasPrefix(encoded, "https://") {
+			return encoded
+		}
+		return ""
+	}
+
+	result := string(decoded)
+	// Sometimes base64 decodes but gives non-URL garbage, verify
+	if strings.HasPrefix(result, "http://") || strings.HasPrefix(result, "https://") {
+		// Clean up the decoded URL
+		if parsed, err := url.Parse(result); err == nil {
+			parsed.Fragment = ""
+			parsed.RawQuery = stripTrackingParams(parsed.RawQuery)
+			return parsed.String()
+		}
+		return result
+	}
+
+	return ""
 }
 
 // stripTrackingParams removes tracking parameters from URLs.
