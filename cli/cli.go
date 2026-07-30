@@ -23,6 +23,9 @@ import (
 	"github.com/bingdork/bingdork/pkg/extractor"
 	"github.com/bingdork/bingdork/pkg/output"
 	"github.com/bingdork/bingdork/pkg/providers/bing"
+	"github.com/bingdork/bingdork/pkg/providers/brave"
+	"github.com/bingdork/bingdork/pkg/providers/duckduckgo"
+	"github.com/bingdork/bingdork/pkg/providers/google"
 	"github.com/bingdork/bingdork/pkg/storage"
 )
 
@@ -102,12 +105,48 @@ func (a *App) Initialize(cfgPath string) error {
 
 	// Providers
 	var providers []core.SearchProvider
+
+	// Bing
 	if cfg.Providers.Bing.Enabled {
 		bingProvider, err := bing.New(&cfg.Providers.Bing, &cfg.Network, log)
 		if err != nil {
 			log.Warn("failed to initialize Bing provider", logger.LogFields{"error": err})
 		} else {
 			providers = append(providers, bingProvider)
+			log.Info("provider registered", logger.LogFields{"provider": "bing"})
+		}
+	}
+
+	// Google
+	if cfg.Providers.Google.Enabled {
+		googleProvider, err := google.New(&cfg.Providers.Google, &cfg.Network, log)
+		if err != nil {
+			log.Warn("failed to initialize Google provider", logger.LogFields{"error": err})
+		} else {
+			providers = append(providers, googleProvider)
+			log.Info("provider registered", logger.LogFields{"provider": "google"})
+		}
+	}
+
+	// DuckDuckGo
+	if cfg.Providers.DuckDuckGo.Enabled {
+		duckduckgoProvider, err := duckduckgo.New(&cfg.Providers.DuckDuckGo, &cfg.Network, log)
+		if err != nil {
+			log.Warn("failed to initialize DuckDuckGo provider", logger.LogFields{"error": err})
+		} else {
+			providers = append(providers, duckduckgoProvider)
+			log.Info("provider registered", logger.LogFields{"provider": "duckduckgo"})
+		}
+	}
+
+	// Brave
+	if cfg.Providers.Brave.Enabled {
+		braveProvider, err := brave.New(&cfg.Providers.Brave, &cfg.Network, log)
+		if err != nil {
+			log.Warn("failed to initialize Brave provider", logger.LogFields{"error": err})
+		} else {
+			providers = append(providers, braveProvider)
+			log.Info("provider registered", logger.LogFields{"provider": "brave"})
 		}
 	}
 

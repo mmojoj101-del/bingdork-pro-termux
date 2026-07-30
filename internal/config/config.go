@@ -181,17 +181,17 @@ providers:
     timeout: 30s
     captcha: true
   google:
-    enabled: false
+    enabled: true
     base_url: https://www.google.com/search
     rate_limit: 5
     timeout: 30s
   duckduckgo:
-    enabled: false
+    enabled: true
     base_url: https://html.duckduckgo.com/html
     rate_limit: 5
     timeout: 30s
   brave:
-    enabled: false
+    enabled: true
     base_url: https://search.brave.com/search
     rate_limit: 10
     timeout: 30s
@@ -283,6 +283,20 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("providers.default", "bing")
 	v.SetDefault("providers.bing.enabled", true)
 	v.SetDefault("providers.bing.rate_limit", 10)
+	v.SetDefault("providers.bing.timeout", "30s")
+	v.SetDefault("providers.bing.captcha", true)
+
+	v.SetDefault("providers.google.enabled", true)
+	v.SetDefault("providers.google.rate_limit", 5)
+	v.SetDefault("providers.google.timeout", "30s")
+
+	v.SetDefault("providers.duckduckgo.enabled", true)
+	v.SetDefault("providers.duckduckgo.rate_limit", 5)
+	v.SetDefault("providers.duckduckgo.timeout", "30s")
+
+	v.SetDefault("providers.brave.enabled", true)
+	v.SetDefault("providers.brave.rate_limit", 10)
+	v.SetDefault("providers.brave.timeout", "30s")
 
 	v.SetDefault("api.enabled", false)
 	v.SetDefault("api.host", "127.0.0.1")
